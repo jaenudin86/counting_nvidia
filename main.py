@@ -2,6 +2,7 @@
 # ├── main.py
 # ├── config.yaml
 # ├── requirements.txt
+# ├── rtsp_server.py (opsional sebagai GStreamer RTSP server)
 # └── vehicle_counting.service (untuk autostart systemd)
 
 # === requirements.txt ===
@@ -32,6 +33,7 @@ import tensorrt as trt
 import pycuda.driver as cuda
 import pycuda.autoinit
 import subprocess
+import os
 
 # Load config
 with open("config.yaml") as f:
@@ -44,7 +46,6 @@ PORT = config.get("rtsp_output_port", 8554)
 DB_CONFIG = config["db"]
 
 CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
-
 
 def async_save_to_db(vehicle_type, direction):
     def db_thread():
@@ -65,13 +66,11 @@ def async_save_to_db(vehicle_type, direction):
                 pass
     threading.Thread(target=db_thread, daemon=True).start()
 
-
 def crossed_line(p1, p2, line_start, line_end):
     def ccw(a, b, c):
         return (c[1]-a[1]) * (b[0]-a[0]) > (b[1]-a[1]) * (c[0]-a[0])
     return ccw(p1, line_start, line_end) != ccw(p2, line_start, line_end) and \
            ccw(p1, p2, line_start) != ccw(p1, p2, line_end)
-
 
 class TRTInference:
     def __init__(self, engine_path):
@@ -99,13 +98,11 @@ class TRTInference:
         cuda.memcpy_dtoh(self.outputs[0][0], self.outputs[0][1])
         return self.outputs[0][0].reshape(-1, 6)
 
-
 def preprocess(frame):
     img = cv2.resize(frame, (640, 640))
     img = img[:, :, ::-1].transpose(2, 0, 1)
     img = np.ascontiguousarray(img, dtype=np.float32) / 255.0
     return img[np.newaxis, ...]
-
 
 def postprocess(detections, conf=0.4):
     result = []
@@ -117,7 +114,6 @@ def postprocess(detections, conf=0.4):
             box = det[:4] * 640
             result.append((box.astype(int), CLASSES[cls_id]))
     return result
-
 
 if __name__ == "__main__":
     cap = cv2.VideoCapture(VIDEO_PATH)
@@ -140,7 +136,7 @@ if __name__ == "__main__":
         f'appsrc ! videoconvert ! omxh264enc ! rtph264pay config-interval=1 pt=96 ! '
         f'udpsink host=127.0.0.1 port={PORT}'
     )
-    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25, (width, height))
+    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height), True)
 
     while True:
         ret, frame = cap.read()
@@ -191,9 +187,14 @@ if __name__ == "__main__":
             y_offset += 20
 
         out.write(frame)
-        cv2.imshow("Vehicle Counting TensorRT", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+
+        # Jika jalan di SSH, jangan tampilkan GUI
+        if os.getenv("DISPLAY"):
+            cv2.imshow("Vehicle Counting TensorRT", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+        else:
+            cv2.waitKey(1)
 
     cap.release()
     out.release()
