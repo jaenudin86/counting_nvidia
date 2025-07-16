@@ -176,11 +176,13 @@ if __name__ == "__main__":
                         total_in += 1
                         in_count[label] += 1
                         memory[tid]["counted"] = "in"
+                        print(f"[LOG] {label} masuk (IN) di posisi {curr} pada {datetime.now()}")
                         async_save_to_db(label, "in")
                     elif crossed_line(prev, curr, *line_out):
                         total_out += 1
                         out_count[label] += 1
                         memory[tid]["counted"] = "out"
+                        print(f"[LOG] {label} keluar (OUT) di posisi {curr} pada {datetime.now()}")
                         async_save_to_db(label, "out")
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,255), 2)
