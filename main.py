@@ -133,8 +133,8 @@ if __name__ == "__main__":
     model = TRTInference(MODEL_PATH)
 
     gst_out = (
-        f'appsrc ! videoconvert ! omxh264enc ! rtph264pay config-interval=1 pt=96 ! '
-        f'udpsink host=127.0.0.1 port={PORT}'
+        f'appsrc ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! '
+        f'rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}'
     )
     out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height))
 
@@ -188,7 +188,6 @@ if __name__ == "__main__":
 
         out.write(frame)
 
-        # Jika jalan di SSH, jangan tampilkan GUI
         if os.getenv("DISPLAY"):
             cv2.imshow("Vehicle Counting TensorRT", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
