@@ -133,10 +133,12 @@ if __name__ == "__main__":
     model = TRTInference(MODEL_PATH)
 
     gst_out = (
-        f'appsrc ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! '
+        f'appsrc ! videoconvert ! nvv4l2h264enc ! '
         f'rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}'
     )
-    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height))
+
+
+    out = cv2.VideoWriter("out.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 25.0, (width, height))
 
     while True:
         ret, frame = cap.read()
