@@ -82,6 +82,7 @@ def crossed_line(p1, p2, line_start, line_end):
 class TRTInference:
     def __init__(self, engine_path):
         self.logger = trt.Logger(trt.Logger.WARNING)
+        print(f"[INFO] Loading TensorRT engine from: {engine_path}")
         with open(engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
             self.engine = runtime.deserialize_cuda_engine(f.read())
         self.context = self.engine.create_execution_context()
@@ -123,6 +124,7 @@ def postprocess(detections, conf=0.4):
     return result
 
 if __name__ == "__main__":
+    print(f"[INFO] Opening video stream: {VIDEO_PATH}")
     cap = cv2.VideoCapture(VIDEO_PATH)
     if not cap.isOpened():
         print("[ERROR] Tidak bisa buka video")
@@ -131,6 +133,7 @@ if __name__ == "__main__":
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    print(f"[INFO] Video size: {width}x{height}, FPS: {fps}")
 
     line_in = ((0, int(height * 0.4)), (width, int(height * 0.4)))
     line_out = ((0, int(height * 0.6)), (width, int(height * 0.6)))
@@ -140,6 +143,7 @@ if __name__ == "__main__":
     out_count = {v: 0 for v in CLASSES.values()}
 
     model = TRTInference(MODEL_PATH)
+    print("[INFO] Model loaded and ready.")
 
     pipeline = Gst.parse_launch(
         f"appsrc name=mysource is-live=true block=true format=3 ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}"
@@ -148,17 +152,22 @@ if __name__ == "__main__":
     caps = Gst.Caps.from_string(f"video/x-raw,format=BGR,width={width},height={height},framerate={int(fps)}/1")
     appsrc.set_caps(caps)
     pipeline.set_state(Gst.State.PLAYING)
+    print("[INFO] GStreamer pipeline started.")
 
     while True:
         ret, frame = cap.read()
         if not ret:
+            print("[WARNING] Frame tidak terbaca. Exit loop.")
             break
 
+        print("[INFO] Running inference on frame...")
         inp = preprocess(frame)
         dets = model.infer(inp)
+        print(f"[INFO] Detection result: {dets.shape}")
         results = postprocess(dets)
 
         for box, label in results:
+            print(f"[INFO] Detected {label} at {box}")
             x1, y1, x2, y2 = box
             x_center = (x1 + x2) // 2
             y_center = (y1 + y2) // 2
@@ -176,13 +185,11 @@ if __name__ == "__main__":
                         total_in += 1
                         in_count[label] += 1
                         memory[tid]["counted"] = "in"
-                        print(f"[LOG] {label} masuk (IN) di posisi {curr} pada {datetime.now()}")
                         async_save_to_db(label, "in")
                     elif crossed_line(prev, curr, *line_out):
                         total_out += 1
                         out_count[label] += 1
                         memory[tid]["counted"] = "out"
-                        print(f"[LOG] {label} keluar (OUT) di posisi {curr} pada {datetime.now()}")
                         async_save_to_db(label, "out")
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,255), 2)
