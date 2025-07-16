@@ -133,11 +133,16 @@ if __name__ == "__main__":
     model = TRTInference(MODEL_PATH)
 
     gst_out = (
-        f'appsrc ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! '
-        f'rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}'
+        f"appsrc ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! "
+        f"rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}"
     )
-    fourcc = cv2.VideoWriter_fourcc(*'H264')  # atau 'avc1' jika H264 gagal
+    fourcc = cv2.VideoWriter_fourcc(*"H264")
+    print("[INFO] Trying to open VideoWriter with:", gst_out)
+    print("[INFO] Frame size:", (width, height))
     out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, fourcc, 25.0, (width, height))
+    if not out.isOpened():
+        print("[ERROR] VideoWriter failed to open.")
+        exit()
 
     while True:
         ret, frame = cap.read()
