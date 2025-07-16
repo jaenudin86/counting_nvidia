@@ -136,7 +136,7 @@ if __name__ == "__main__":
         f'appsrc ! videoconvert ! omxh264enc ! rtph264pay config-interval=1 pt=96 ! '
         f'udpsink host=127.0.0.1 port={PORT}'
     )
-    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height), True)
+    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height))
 
     while True:
         ret, frame = cap.read()
