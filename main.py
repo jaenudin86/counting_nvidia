@@ -136,7 +136,8 @@ if __name__ == "__main__":
         f'appsrc ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! '
         f'rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}'
     )
-    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height))
+    fourcc = cv2.VideoWriter_fourcc(*'H264')  # atau 'avc1' jika H264 gagal
+    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, fourcc, 25.0, (width, height))
 
     while True:
         ret, frame = cap.read()
