@@ -12,6 +12,7 @@
 # pycuda
 # pymysql
 # tensorrt==8.x (disesuaikan versi di Jetson)
+# pygobject
 
 # === config.yaml ===
 # video_url: "https://rtmp.ruangkitastudio.com/memfs/xxx.m3u8"
@@ -32,8 +33,14 @@ from datetime import datetime
 import tensorrt as trt
 import pycuda.driver as cuda
 import pycuda.autoinit
-import subprocess
 import os
+import gi
+
+gi.require_version('Gst', '1.0')
+gi.require_version('GstApp', '1.0')
+from gi.repository import Gst, GstApp, GLib
+
+Gst.init(None)
 
 # Load config
 with open("config.yaml") as f:
@@ -123,6 +130,8 @@ if __name__ == "__main__":
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+
     line_in = ((0, int(height * 0.4)), (width, int(height * 0.4)))
     line_out = ((0, int(height * 0.6)), (width, int(height * 0.6)))
     memory = {}
@@ -132,17 +141,13 @@ if __name__ == "__main__":
 
     model = TRTInference(MODEL_PATH)
 
-    gst_out = (
-        f"appsrc ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! "
-        f"rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}"
+    pipeline = Gst.parse_launch(
+        f"appsrc name=mysource is-live=true block=true format=3 ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}"
     )
-    fourcc = cv2.VideoWriter_fourcc(*"H264")
-    print("[INFO] Trying to open VideoWriter with:", gst_out)
-    print("[INFO] Frame size:", (width, height))
-    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, fourcc, 25.0, (width, height))
-    if not out.isOpened():
-        print("[ERROR] VideoWriter failed to open.")
-        exit()
+    appsrc = pipeline.get_by_name("mysource")
+    caps = Gst.Caps.from_string(f"video/x-raw,format=BGR,width={width},height={height},framerate={int(fps)}/1")
+    appsrc.set_caps(caps)
+    pipeline.set_state(Gst.State.PLAYING)
 
     while True:
         ret, frame = cap.read()
@@ -192,7 +197,15 @@ if __name__ == "__main__":
             cv2.putText(frame, txt, (width-300, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
             y_offset += 20
 
-        out.write(frame)
+        success, buffer = cv2.imencode(".jpg", frame)
+        if success:
+            sample = Gst.Sample.new(
+                Gst.Buffer.new_wrapped(buffer.tobytes()),
+                caps,
+                None,
+                None
+            )
+            appsrc.emit("push-sample", sample)
 
         if os.getenv("DISPLAY"):
             cv2.imshow("Vehicle Counting TensorRT", frame)
@@ -202,5 +215,5 @@ if __name__ == "__main__":
             cv2.waitKey(1)
 
     cap.release()
-    out.release()
+    pipeline.set_state(Gst.State.NULL)
     cv2.destroyAllWindows()
