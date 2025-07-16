@@ -1,9 +1,8 @@
-# rtsp_server.py
-
 import gi
 gi.require_version('Gst', '1.0')
 gi.require_version('GstRtspServer', '1.0')
-from gi.repository import Gst, GstRtspServer
+
+from gi.repository import Gst, GstRtspServer, GLib
 
 Gst.init(None)
 
@@ -27,8 +26,9 @@ class RTSPServer:
         mount_points = self.server.get_mount_points()
         mount_points.add_factory("/live", factory)
         self.server.attach(None)
-        print("RTSP stream ready at rtsp://<IP>:8554/live")
+        print("✅ RTSP stream ready at rtsp://<IP>:8554/live")
 
 if __name__ == '__main__':
     RTSPServer()
-    loop = Gst.main()
+    loop = GLib.MainLoop()
+    loop.run()

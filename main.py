@@ -138,7 +138,7 @@ if __name__ == "__main__":
         f'udpsink host=127.0.0.1 port={PORT} sync=false async=false'
     )
 
-    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height), True)
+    out = cv2.VideoWriter(gst_out, cv2.CAP_GSTREAMER, 0, 25.0, (width, height))
 
     while True:
         ret, frame = cap.read()
