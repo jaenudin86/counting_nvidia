@@ -1,28 +1,3 @@
-# === VehicleCountingTRT Folder Structure ===
-# ├── main.py
-# ├── config.yaml
-# ├── requirements.txt
-# ├── rtsp_server.py (opsional sebagai GStreamer RTSP server)
-# └── vehicle_counting.service (untuk autostart systemd)
-
-# === requirements.txt ===
-# opencv-python
-# numpy
-# PyYAML
-# pycuda
-# pymysql
-# tensorrt==8.x (disesuaikan versi di Jetson)
-# pygobject
-
-# === config.yaml ===
-# video_url: "https://rtmp.ruangkitastudio.com/memfs/xxx.m3u8"
-# model_path: "best.engine"
-# rtsp_output_port: 8554
-# db:
-#   host: "103.115.164.119"
-#   user: "vehilce_count"
-#   password: "HPGnjLGGM6abndKp"
-#   database: "vehilce_count"
 
 import cv2
 import numpy as np
