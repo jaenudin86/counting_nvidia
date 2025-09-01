@@ -260,11 +260,9 @@ if __name__ == "__main__":
     pipeline, appsrc = build_gst_pipeline(width, height, fps)
     pipeline.set_state(Gst.State.PLAYING)
     print(f"[INFO] GStreamer pipeline PLAYING -> UDP {UDP_PORT} (RTSP server baca dari sini)")
-
     # Graceful shutdown
     def handle_sigint(sig, frame):
-        print("
-[INFO] SIGINT received, sending EOS...")
+        print("[INFO] SIGINT received, sending EOS...")
         try:
             appsrc.emit("end-of-stream")
         except Exception:
@@ -273,6 +271,7 @@ if __name__ == "__main__":
         cap.release()
         cv2.destroyAllWindows()
         os._exit(0)
+
 
     signal.signal(signal.SIGINT, handle_sigint)
 
