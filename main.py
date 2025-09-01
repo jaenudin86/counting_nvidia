@@ -32,7 +32,7 @@ CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 def async_save_to_db(vehicle_type, direction):
     def db_thread():
         try:
-            conn = pymysql.connect(**DB_CONFIG, autocommit=True)
+            conn = pymysql.connect(DB_CONFIG, autocommit=True)
             cursor = conn.cursor()
             now = datetime.now()
             query = "INSERT INTO vehicle_log (vehicle_type, direction, timestamp) VALUES (%s, %s, %s)"
