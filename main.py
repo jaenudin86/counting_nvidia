@@ -57,7 +57,7 @@ def crossed_line(p1, p2, line_start, line_end):
 class TRTInference:
     def __init__(self, engine_path):
         self.logger = trt.Logger(trt.Logger.WARNING)
-        print(f"[INFO] Loading TensorRT engine from: {engine_path}")
+        # print(f"[INFO] Loading TensorRT engine from: {engine_path}")
         with open(engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
             self.engine = runtime.deserialize_cuda_engine(f.read())
         self.context = self.engine.create_execution_context()
@@ -99,7 +99,7 @@ def postprocess(detections, conf=0.4):
     return result
 
 if __name__ == "__main__":
-    print(f"[INFO] Opening video stream: {VIDEO_PATH}")
+    # print(f"[INFO] Opening video stream: {VIDEO_PATH}")
     cap = cv2.VideoCapture(VIDEO_PATH)
     if not cap.isOpened():
         print("[ERROR] Tidak bisa buka video")
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    print(f"[INFO] Video size: {width}x{height}, FPS: {fps}")
+    # print(f"[INFO] Video size: {width}x{height}, FPS: {fps}")
 
     line_in = ((0, int(height * 0.4)), (width, int(height * 0.4)))
     line_out = ((0, int(height * 0.6)), (width, int(height * 0.6)))
