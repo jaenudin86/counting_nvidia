@@ -1,4 +1,28 @@
-# -*- coding: utf-8 -*-
+# === VehicleCountingTRT Folder Structure ===
+# ├── main.py
+# ├── config.yaml
+# ├── requirements.txt
+# ├── rtsp_server.py (opsional sebagai GStreamer RTSP server)
+# └── vehicle_counting.service (untuk autostart systemd)
+
+# === requirements.txt ===
+# opencv-python
+# numpy
+# PyYAML
+# pycuda
+# pymysql
+# tensorrt==8.x (disesuaikan versi di Jetson)
+# pygobject
+
+# === config.yaml ===
+# video_url: "https://rtmp.ruangkitastudio.com/memfs/xxx.m3u8"
+# model_path: "best.engine"
+# rtsp_output_port: 8554
+# db:
+#   host: "103.115.164.119"
+#   user: "vehilce_count"
+#   password: "HPGnjLGGM6abndKp"
+#   database: "vehilce_count"
 
 import cv2
 import numpy as np
@@ -10,10 +34,8 @@ import tensorrt as trt
 import pycuda.driver as cuda
 import pycuda.autoinit
 import os
-import signal
 import gi
 
-# GStreamer init
 gi.require_version('Gst', '1.0')
 gi.require_version('GstApp', '1.0')
 from gi.repository import Gst, GstApp, GLib
@@ -26,34 +48,30 @@ with open("config.yaml") as f:
 
 VIDEO_PATH = config["video_url"]
 MODEL_PATH = config["model_path"]
-# Gunakan port UDP terpisah untuk pipeline internal; RTSP server tetap di 8554
-UDP_PORT = int(config.get("rtsp_udp_port", 5000))
-RTSP_PORT = int(config.get("rtsp_output_port", 8554))  # hanya sebagai info
+PORT = config.get("rtsp_output_port", 8554)
 
 DB_CONFIG = config["db"]
 
 CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
-
 def async_save_to_db(vehicle_type, direction):
     def db_thread():
         try:
-            # FIX: gunakan **DB_CONFIG, sebelumnya salah
             conn = pymysql.connect(**DB_CONFIG, autocommit=True)
             cursor = conn.cursor()
             now = datetime.now()
             query = "INSERT INTO vehicle_log (vehicle_type, direction, timestamp) VALUES (%s, %s, %s)"
             cursor.execute(query, (vehicle_type, direction, now))
+            print(f"[DB] {vehicle_type} {direction} @ {now}")
         except Exception as e:
             print("[DB ERROR]", e)
         finally:
             try:
                 cursor.close()
                 conn.close()
-            except Exception:
+            except:
                 pass
     threading.Thread(target=db_thread, daemon=True).start()
-
 
 def crossed_line(p1, p2, line_start, line_end):
     def ccw(a, b, c):
@@ -61,11 +79,10 @@ def crossed_line(p1, p2, line_start, line_end):
     return ccw(p1, line_start, line_end) != ccw(p2, line_start, line_end) and \
            ccw(p1, p2, line_start) != ccw(p1, p2, line_end)
 
-
 class TRTInference:
     def __init__(self, engine_path):
         self.logger = trt.Logger(trt.Logger.WARNING)
-        print(f"[INFO] Loading TensorRT engine: {engine_path}")
+        print(f"[INFO] Loading TensorRT engine from: {engine_path}")
         with open(engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
             self.engine = runtime.deserialize_cuda_engine(f.read())
         self.context = self.engine.create_execution_context()
@@ -89,163 +106,34 @@ class TRTInference:
         cuda.memcpy_dtoh(self.outputs[0][0], self.outputs[0][1])
         return self.outputs[0][0].reshape(-1, 6)
 
-
 def preprocess(frame):
     img = cv2.resize(frame, (640, 640))
     img = img[:, :, ::-1].transpose(2, 0, 1)
     img = np.ascontiguousarray(img, dtype=np.float32) / 255.0
     return img[np.newaxis, ...]
 
-
-def nms(boxes, scores, iou_threshold=0.45):
-    if len(boxes) == 0:
-        return []
-    boxes = boxes.astype(np.float32)
-    x1 = boxes[:,0]
-    y1 = boxes[:,1]
-    x2 = boxes[:,2]
-    y2 = boxes[:,3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        if order.size == 1:
-            break
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
-        inds = np.where(iou <= iou_threshold)[0]
-        order = order[inds + 1]
-    return keep
-
-
-def postprocess(detections, frame_w, frame_h, input_size=640, conf=0.4, iou_thresh=0.45):
-    """
-    Robust postprocess for TensorRT YOLO-like raw output.
-    detections: (N,6) array where columns are [x1, y1, x2, y2, conf, class]
-    This function attempts to auto-detect the scale of coordinates and convert boxes to frame size,
-    apply confidence threshold and non-maximum suppression (NMS).
-    """
-    if detections is None or len(detections) == 0:
-        return []
-
-    dets = np.array(detections, dtype=np.float32)
-    # ensure shape (-1,6)
-    if dets.ndim == 1 and dets.size == 6:
-        dets = dets.reshape(1,6)
-    if dets.shape[1] < 6:
-        # unexpected format
-        return []
-
-    coords = dets[:,:4]
-    scores = dets[:,4]
-    classes = dets[:,5].astype(np.int32)
-
-    # quick heuristic to detect coordinate scale
-    max_coord = coords.max()
-    if max_coord <= 1.0:
-        # normalized [0,1] -> map to input_size
-        coords = coords * input_size
-    elif max_coord > input_size * 1.5:
-        # coordinates seem scaled (very large), attempt to normalize by factor
-        factor = max_coord / input_size
-        coords = coords / factor
-
-    # coords currently in input_size (e.g., 640) space -> convert to frame size
-    scale_x = frame_w / float(input_size)
-    scale_y = frame_h / float(input_size)
-    coords[:,[0,2]] = coords[:,[0,2]] * scale_x
-    coords[:,[1,3]] = coords[:,[1,3]] * scale_y
-
-    # convert to x1,y1,x2,y2 ints and clip
-    boxes = coords.copy()
-    boxes[:,0] = np.clip(boxes[:,0], 0, frame_w-1)
-    boxes[:,1] = np.clip(boxes[:,1], 0, frame_h-1)
-    boxes[:,2] = np.clip(boxes[:,2], 0, frame_w-1)
-    boxes[:,3] = np.clip(boxes[:,3], 0, frame_h-1)
-
-    # filter by confidence and valid boxes (w>1,h>1)
-    valid = (scores >= conf) & ((boxes[:,2]-boxes[:,0]) > 2) & ((boxes[:,3]-boxes[:,1]) > 2)
-    if not np.any(valid):
-        return []
-
-    boxes = boxes[valid]
-    scores = scores[valid]
-    classes = classes[valid]
-
-    # perform NMS per class
-    final = []
-    unique_classes = np.unique(classes)
-    for cls in unique_classes:
-        inds = np.where(classes == cls)[0]
-        cls_boxes = boxes[inds]
-        cls_scores = scores[inds]
-        if len(cls_boxes) == 0:
+def postprocess(detections, conf=0.4):
+    result = []
+    for det in detections:
+        if det[4] < conf:
             continue
-        keep = nms(cls_boxes, cls_scores, iou_threshold=iou_thresh)
-        for k in keep:
-            b = cls_boxes[k].astype(int)
-            label = CLASSES.get(int(cls), str(cls))
-            final.append((b, label))
-
-    return final
-
-
-def build_gst_pipeline(width, height, fps):
-    # appsrc -> (BGR raw) -> videoconvert -> nvvidconv -> nvv4l2h264enc -> rtph264pay -> udpsink
-    launch = (
-        f"appsrc name=mysource is-live=true block=true format=time do-timestamp=true ! "
-        f"videoconvert ! nvvidconv ! "
-        f"nvv4l2h264enc bitrate=800000 insert-sps-pps=true idrinterval=30 ! "
-        f"rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={UDP_PORT} sync=false async=false"
-    )
-    print("[GST] Launch:", launch)
-    pipeline = Gst.parse_launch(launch)
-    appsrc = pipeline.get_by_name("mysource")
-    # Caps untuk RAW BGR (bukan JPEG). Kita akan push bytes frame.tobytes()
-    caps = Gst.Caps.from_string(
-        f"video/x-raw,format=BGR,width={width},height={height},framerate={int(fps)}/1"
-    )
-    appsrc.set_caps(caps)
-    # Simpan fps untuk timestamping
-    appsrc.set_property("format", Gst.Format.TIME)
-    appsrc.set_property("do-timestamp", True)
-    return pipeline, appsrc
-
-
-def push_frame_appsrc(appsrc, frame, fps, frame_count):
-    # Buat buffer sebesar frame dan isi data BGR
-    data = frame.tobytes()
-    buf = Gst.Buffer.new_allocate(None, len(data), None)
-    buf.fill(0, data)
-    # set PTS/DTS agar pacing benar
-    duration = int(1e9 / max(fps, 1))
-    buf.pts = buf.dts = frame_count * duration
-    buf.duration = duration
-    retval = appsrc.emit("push-buffer", buf)
-    if retval != Gst.FlowReturn.OK:
-        print("[GST] push-buffer not OK:", retval)
-
+        cls_id = int(det[5])
+        if cls_id in CLASSES:
+            box = det[:4] * 640
+            result.append((box.astype(int), CLASSES[cls_id]))
+    return result
 
 if __name__ == "__main__":
-    print(f"[INFO] Opening video: {VIDEO_PATH}")
+    print(f"[INFO] Opening video stream: {VIDEO_PATH}")
     cap = cv2.VideoCapture(VIDEO_PATH)
     if not cap.isOpened():
         print("[ERROR] Tidak bisa buka video")
-        raise SystemExit(1)
+        exit()
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps_read = cap.get(cv2.CAP_PROP_FPS)
-    fps = fps_read if fps_read and fps_read > 0 else 25.0
-    print(f"[INFO] Size: {width}x{height} @ {fps:.2f} FPS")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    print(f"[INFO] Video size: {width}x{height}, FPS: {fps}")
 
     line_in = ((0, int(height * 0.4)), (width, int(height * 0.4)))
     line_out = ((0, int(height * 0.6)), (width, int(height * 0.6)))
@@ -255,40 +143,31 @@ if __name__ == "__main__":
     out_count = {v: 0 for v in CLASSES.values()}
 
     model = TRTInference(MODEL_PATH)
-    print("[INFO] TensorRT engine ready.")
+    print("[INFO] Model loaded and ready.")
 
-    pipeline, appsrc = build_gst_pipeline(width, height, fps)
+    pipeline = Gst.parse_launch(
+        f"appsrc name=mysource is-live=true block=true format=3 ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}"
+    )
+    appsrc = pipeline.get_by_name("mysource")
+    caps = Gst.Caps.from_string(f"video/x-raw,format=BGR,width={width},height={height},framerate={int(fps)}/1")
+    appsrc.set_caps(caps)
     pipeline.set_state(Gst.State.PLAYING)
-    print(f"[INFO] GStreamer pipeline PLAYING -> UDP {UDP_PORT} (RTSP server baca dari sini)")
-    # Graceful shutdown
-    def handle_sigint(sig, frame):
-        print("[INFO] SIGINT received, sending EOS...")
-        try:
-            appsrc.emit("end-of-stream")
-        except Exception:
-            pass
-        pipeline.set_state(Gst.State.NULL)
-        cap.release()
-        cv2.destroyAllWindows()
-        os._exit(0)
+    print("[INFO] GStreamer pipeline started.")
 
-
-    signal.signal(signal.SIGINT, handle_sigint)
-
-    frame_count = 0
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("[WARN] Frame tidak terbaca, stop.")
+            print("[WARNING] Frame tidak terbaca. Exit loop.")
             break
 
-        # Inference
+        print("[INFO] Running inference on frame...")
         inp = preprocess(frame)
         dets = model.infer(inp)
+        print(f"[INFO] Detection result: {dets.shape}")
         results = postprocess(dets)
 
-        # Counting + overlay
         for box, label in results:
+            print(f"[INFO] Detected {label} at {box}")
             x1, y1, x2, y2 = box
             x_center = (x1 + x2) // 2
             y_center = (y1 + y2) // 2
@@ -313,36 +192,37 @@ if __name__ == "__main__":
                         memory[tid]["counted"] = "out"
                         async_save_to_db(label, "out")
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,255), 2)
+            cv2.putText(frame, label, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
 
-        cv2.line(frame, *line_in, (0, 255, 0), 2)
-        cv2.line(frame, *line_out, (0, 0, 255), 2)
-        cv2.putText(frame, f"IN : {total_in}", (20, height - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"OUT: {total_out}", (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        cv2.line(frame, *line_in, (0,255,0), 2)
+        cv2.line(frame, *line_out, (0,0,255), 2)
+        cv2.putText(frame, f"IN : {total_in}", (20, height-60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+        cv2.putText(frame, f"OUT: {total_out}", (20, height-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
 
         y_offset = 30
         for label in in_count:
             txt = f"{label.upper()} IN: {in_count[label]} OUT: {out_count[label]}"
-            cv2.putText(frame, txt, (max(0, width - 320), y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, txt, (width-300, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
             y_offset += 20
 
-        # PUSH RAW BGR (bukan JPEG)
-        push_frame_appsrc(appsrc, frame, fps, frame_count)
-        frame_count += 1
+        success, buffer = cv2.imencode(".jpg", frame)
+        if success:
+            sample = Gst.Sample.new(
+                Gst.Buffer.new_wrapped(buffer.tobytes()),
+                caps,
+                None,
+                None
+            )
+            appsrc.emit("push-sample", sample)
 
         if os.getenv("DISPLAY"):
             cv2.imshow("Vehicle Counting TensorRT", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
         else:
-            # beri small sleep agar CPU tidak 100%
             cv2.waitKey(1)
 
     cap.release()
-    try:
-        appsrc.emit("end-of-stream")
-    except Exception:
-        pass
     pipeline.set_state(Gst.State.NULL)
     cv2.destroyAllWindows()
