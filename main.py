@@ -37,7 +37,7 @@ def async_save_to_db(vehicle_type, direction):
             now = datetime.now()
             query = "INSERT INTO vehicle_log (vehicle_type, direction, timestamp) VALUES (%s, %s, %s)"
             cursor.execute(query, (vehicle_type, direction, now))
-            print(f"[DB] {vehicle_type} {direction} @ {now}")
+            # print(f"[DB] {vehicle_type} {direction} @ {now}")
         except Exception as e:
             print("[DB ERROR]", e)
         finally:
