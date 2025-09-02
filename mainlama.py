@@ -107,11 +107,18 @@ class TRTInference:
         return self.outputs[0][0].reshape(-1, 6)
 
 def preprocess(frame):
-    # img = cv2.resize(frame, (640, 640))
-    img = cv2.resize(frame, (960, int(frame.shape[0] * 960 / frame.shape[1])))
+    # Resize ke input model (640x640)
+    img = cv2.resize(frame, (640, 640))
+
+    # BGR → RGB dan HWC → CHW
     img = img[:, :, ::-1].transpose(2, 0, 1)
+
+    # Pastikan contiguous dan normalize
     img = np.ascontiguousarray(img, dtype=np.float32) / 255.0
-    return img[np.newaxis, ...]
+
+    # Tambahkan batch dimensi → (1, 3, 640, 640)
+    return img[np.newaxis, :, :, :]
+
 
 def postprocess(detections, conf=0.4):
     result = []
