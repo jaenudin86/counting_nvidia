@@ -1,3 +1,29 @@
+# === VehicleCountingTRT Folder Structure ===
+# ├── main.py
+# ├── config.yaml
+# ├── requirements.txt
+# ├── rtsp_server.py (opsional sebagai GStreamer RTSP server)
+# └── vehicle_counting.service (untuk autostart systemd)
+
+# === requirements.txt ===
+# opencv-python
+# numpy
+# PyYAML
+# pycuda
+# pymysql
+# tensorrt==8.x (disesuaikan versi di Jetson)
+# pygobject
+
+# === config.yaml ===
+# video_url: "https://rtmp.ruangkitastudio.com/memfs/xxx.m3u8"
+# model_path: "best.engine"
+# rtsp_output_port: 8554
+# db:
+#   host: "103.115.164.119"
+#   user: "vehilce_count"
+#   password: "HPGnjLGGM6abndKp"
+#   database: "vehilce_count"
+
 import cv2
 import numpy as np
 import yaml
@@ -11,22 +37,23 @@ import os
 import gi
 
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst
+gi.require_version('GstApp', '1.0')
+from gi.repository import Gst, GstApp, GLib
 
 Gst.init(None)
 
-# === Load config ===
+# Load config
 with open("config.yaml") as f:
     config = yaml.safe_load(f)
 
 VIDEO_PATH = config["video_url"]
 MODEL_PATH = config["model_path"]
 PORT = config.get("rtsp_output_port", 8554)
+
 DB_CONFIG = config["db"]
 
 CLASSES = {0: "person", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
-# === DB Saver Async ===
 def async_save_to_db(vehicle_type, direction):
     def db_thread():
         try:
@@ -46,14 +73,12 @@ def async_save_to_db(vehicle_type, direction):
                 pass
     threading.Thread(target=db_thread, daemon=True).start()
 
-# === Line Crossing Check ===
 def crossed_line(p1, p2, line_start, line_end):
     def ccw(a, b, c):
         return (c[1]-a[1]) * (b[0]-a[0]) > (b[1]-a[1]) * (c[0]-a[0])
     return ccw(p1, line_start, line_end) != ccw(p2, line_start, line_end) and \
            ccw(p1, p2, line_start) != ccw(p1, p2, line_end)
 
-# === TensorRT Wrapper ===
 class TRTInference:
     def __init__(self, engine_path):
         self.logger = trt.Logger(trt.Logger.WARNING)
@@ -81,7 +106,6 @@ class TRTInference:
         cuda.memcpy_dtoh(self.outputs[0][0], self.outputs[0][1])
         return self.outputs[0][0].reshape(-1, 6)
 
-# === Pre/Post Processing ===
 def preprocess(frame):
     img = cv2.resize(frame, (640, 640))
     img = img[:, :, ::-1].transpose(2, 0, 1)
@@ -99,7 +123,6 @@ def postprocess(detections, conf=0.4):
             result.append((box.astype(int), CLASSES[cls_id]))
     return result
 
-# === Main Loop ===
 if __name__ == "__main__":
     print(f"[INFO] Opening video stream: {VIDEO_PATH}")
     cap = cv2.VideoCapture(VIDEO_PATH)
@@ -122,15 +145,14 @@ if __name__ == "__main__":
     model = TRTInference(MODEL_PATH)
     print("[INFO] Model loaded and ready.")
 
-    # === GStreamer RTSP Output ===
     pipeline = Gst.parse_launch(
-        f"appsrc name=mysource is-live=true block=true format=time caps=video/x-raw,format=BGR,width={width},height={height},framerate={int(fps)}/1 ! "
-        "videoconvert ! x264enc tune=zerolatency bitrate=500 speed-preset=superfast ! rtph264pay config-interval=1 pt=96 ! "
-        f"udpsink host=127.0.0.1 port={PORT}"
+        f"appsrc name=mysource is-live=true block=true format=3 ! videoconvert ! nvvidconv ! nvv4l2h264enc bitrate=500000 ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port={PORT}"
     )
     appsrc = pipeline.get_by_name("mysource")
+    caps = Gst.Caps.from_string(f"video/x-raw,format=BGR,width={width},height={height},framerate={int(fps)}/1")
+    appsrc.set_caps(caps)
     pipeline.set_state(Gst.State.PLAYING)
-    print(f"[INFO] GStreamer pipeline started on UDP port {PORT}")
+    print("[INFO] GStreamer pipeline started.")
 
     while True:
         ret, frame = cap.read()
@@ -138,11 +160,14 @@ if __name__ == "__main__":
             print("[WARNING] Frame tidak terbaca. Exit loop.")
             break
 
+        print("[INFO] Running inference on frame...")
         inp = preprocess(frame)
         dets = model.infer(inp)
+        print(f"[INFO] Detection result: {dets.shape}")
         results = postprocess(dets)
 
         for box, label in results:
+            print(f"[INFO] Detected {label} at {box}")
             x1, y1, x2, y2 = box
             x_center = (x1 + x2) // 2
             y_center = (y1 + y2) // 2
@@ -170,20 +195,28 @@ if __name__ == "__main__":
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,255), 2)
             cv2.putText(frame, label, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
 
-        # draw lines & counts
         cv2.line(frame, *line_in, (0,255,0), 2)
         cv2.line(frame, *line_out, (0,0,255), 2)
         cv2.putText(frame, f"IN : {total_in}", (20, height-60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
         cv2.putText(frame, f"OUT: {total_out}", (20, height-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
 
-        # send to pipeline
-        data = frame.tobytes()
-        buf = Gst.Buffer.new_allocate(None, len(data), None)
-        buf.fill(0, data)
-        buf.pts = buf.dts = int(time.time() * 1e9)
-        appsrc.emit("push-buffer", buf)
+        y_offset = 30
+        for label in in_count:
+            txt = f"{label.upper()} IN: {in_count[label]} OUT: {out_count[label]}"
+            cv2.putText(frame, txt, (width-300, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+            y_offset += 20
 
-        if os.getenv("DISPLAY"):  # debug mode
+        success, buffer = cv2.imencode(".jpg", frame)
+        if success:
+            sample = Gst.Sample.new(
+                Gst.Buffer.new_wrapped(buffer.tobytes()),
+                caps,
+                None,
+                None
+            )
+            appsrc.emit("push-sample", sample)
+
+        if os.getenv("DISPLAY"):
             cv2.imshow("Vehicle Counting TensorRT", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
