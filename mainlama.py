@@ -107,7 +107,7 @@ class TRTInference:
         return self.outputs[0][0].reshape(-1, 6)
 
 def preprocess(frame):
-    img = cv2.resize(frame, (640, 640))
+    img = cv2.resize(frame, (1024, 1024))
     img = img[:, :, ::-1].transpose(2, 0, 1)
     img = np.ascontiguousarray(img, dtype=np.float32) / 255.0
     return img[np.newaxis, ...]
