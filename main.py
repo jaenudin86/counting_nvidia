@@ -9,6 +9,7 @@ import pycuda.driver as cuda
 import pycuda.autoinit
 import os
 import gi
+import time
 
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst
